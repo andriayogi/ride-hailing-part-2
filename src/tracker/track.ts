@@ -1,8 +1,12 @@
 import { Request, Response } from "express";
 import { TrackEvent } from "./orm";
 import { bus } from "../lib/bus";
+import { createTracer } from "../lib/tracer";
+
+const tracer = createTracer("track-service");
 
 export async function track(req: Request, res: Response) {
+  const span = tracer.startSpan('track_rider');
   // parsing input
   const param = req.body;
   if (
@@ -12,17 +16,22 @@ export async function track(req: Request, res: Response) {
     !param.east ||
     !param.south
   ) {
+    span.setTag("error", true);
     res.status(400).json({
       ok: false,
       error: "parameter tidak lengkap"
     });
     return;
   }
+  span.finish();
+
   const rider_id = param.rider_id;
   const north = parseFloat(param.north);
   const west = parseFloat(param.west);
   const east = parseFloat(param.east);
   const south = parseFloat(param.south);
+
+  
 
   // save tracking movement
   const track = new TrackEvent({
@@ -36,12 +45,14 @@ export async function track(req: Request, res: Response) {
     await track.save();
   } catch (err) {
     console.error(err);
+    span.setTag("http_status", 500);
     res.status(500).json({
       ok: false,
       message: "gagal menyimpan data"
     });
     return;
   }
+  span.finish();
 
   bus.publish("rider.moved", {
     rider_id,
@@ -55,6 +66,7 @@ export async function track(req: Request, res: Response) {
   res.json({
     ok: true
   });
+  
 }
 
 export async function getMovementLogs(req: Request, res: Response) {
