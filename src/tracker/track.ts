@@ -6,7 +6,8 @@ import { createTracer } from "../lib/tracer";
 const tracer = createTracer("track-service");
 
 export async function track(req: Request, res: Response) {
-  const span = tracer.startSpan('track_rider');
+  const parentSpan = tracer.startSpan("track");
+  const span = tracer.startSpan("parsing_track", { childOf: parentSpan });
   // parsing input
   const param = req.body;
   if (
@@ -17,19 +18,28 @@ export async function track(req: Request, res: Response) {
     !param.south
   ) {
     span.setTag("error", true);
+    span.log({
+      event: "error parsing",
+      message: "parameter tidak lengkap"
+    });
     res.status(400).json({
       ok: false,
       error: "parameter tidak lengkap"
     });
+    span.finish();
+    parentSpan.finish();
     return;
   }
-  span.finish();
 
   const rider_id = param.rider_id;
   const north = parseFloat(param.north);
   const west = parseFloat(param.west);
   const east = parseFloat(param.east);
   const south = parseFloat(param.south);
+  span.finish();
+
+  const span2 = tracer.startSpan("save_track", { childOf: parentSpan });
+  span.setTag("rider_id", rider_id);
 
   
 
@@ -44,16 +54,26 @@ export async function track(req: Request, res: Response) {
   try {
     await track.save();
   } catch (err) {
+    span2.setTag("error", true);
+    span2.log({
+      event: "error parsing",
+      message: err.toString()
+    });
     console.error(err);
     span.setTag("http_status", 500);
     res.status(500).json({
       ok: false,
       message: "gagal menyimpan data"
     });
+    span2.finish();
+    parentSpan.finish();
     return;
   }
-  span.finish();
+  span2.finish();
 
+  const span3 = tracer.startSpan("publish_track_event", {
+    childOf: parentSpan
+  });
   bus.publish("rider.moved", {
     rider_id,
     north,
@@ -61,12 +81,17 @@ export async function track(req: Request, res: Response) {
     east,
     south
   });
+  span3.finish();
 
   // encode output
+  const span4 = tracer.startSpan("encode_track_result", {
+    childOf: parentSpan
+  });
   res.json({
     ok: true
   });
-  
+  span4.finish();
+  parentSpan.finish();
 }
 
 export async function getMovementLogs(req: Request, res: Response) {
